@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"go/ast"
 	"go/token"
-	"os"
 	"regexp"
 	"sort"
 	"strings"
@@ -96,10 +95,11 @@ func CheckPackages(pkgPaths []string, ignore map[string]*regexp.Regexp, blank bo
 		go func(pkgPath string) {
 			defer wg.Done()
 
-			visitor := &checker{program, nil, ignore, blank, types, make(map[string][]string), []error{}}
+			visitor := &checker{program, nil, nil, ignore, blank, types, make(map[string][]string), []error{}}
 
 			visitor.pkg = program.Imported[pkgPath]
 			for _, astFile := range visitor.pkg.Files {
+				visitor.file = astFile
 				ast.Walk(visitor, astFile)
 			}
 
@@ -129,6 +129,7 @@ func CheckPackages(pkgPaths []string, ignore map[string]*regexp.Regexp, blank bo
 type checker struct {
 	prog   *loader.Program
 	pkg    *loader.PackageInfo
+	file   *ast.File
 	ignore map[string]*regexp.Regexp
 	blank  bool
 	types  bool
@@ -232,7 +233,11 @@ func (c *checker) addErrorAtPosition(position token.Pos) {
 	pos := c.prog.Fset.Position(position)
 	lines, ok := c.lines[pos.Filename]
 	if !ok {
-		lines = readfile(pos.Filename)
+		var scanner = bufio.NewScanner(c.prog.Sources[c.file])
+		for scanner.Scan() {
+			lines = append(lines, scanner.Text())
+		}
+
 		c.lines[pos.Filename] = lines
 	}
 
@@ -241,20 +246,6 @@ func (c *checker) addErrorAtPosition(position token.Pos) {
 		line = strings.TrimSpace(lines[pos.Line-1])
 	}
 	c.errors = append(c.errors, uncheckedError{pos, line})
-}
-
-func readfile(filename string) []string {
-	var f, err = os.Open(filename)
-	if err != nil {
-		return nil
-	}
-
-	var lines []string
-	var scanner = bufio.NewScanner(f)
-	for scanner.Scan() {
-		lines = append(lines, scanner.Text())
-	}
-	return lines
 }
 
 func (c *checker) Visit(node ast.Node) ast.Visitor {
